@@ -77,6 +77,9 @@ tools:
   bocha:
     api_key: "sk-**********************"
     endpoint: "https://api.bochaai.com/v1/web-search"
+  # Serply 联网搜索 API 配置（获取 API 密钥: https://serply.io，文档: https://serply.io/docs）
+  serply:
+    api_key: ""
   # You.com Search & Research API 配置（获取 API 密钥: https://ydc-index.io/docs）
   youcom:
     api_key: ""
