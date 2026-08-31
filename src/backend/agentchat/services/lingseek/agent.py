@@ -1,6 +1,7 @@
 import json
 from typing import List, Union, Optional
 
+from loguru import logger
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage, BaseMessage, AIMessageChunk
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
@@ -27,15 +28,20 @@ from agentchat.schemas.lingseek import LingSeekGuidePrompt, LingSeekGuidePromptF
 
 
 class LingSeekAgent:
-    conversation_model = ModelManager.get_conversation_model()
-    tool_call_model = ModelManager.get_lingseek_intent_model()
-
-    def __init__(self, user_id: str):
+    def __init__(self, user_id: str, model_config: Optional[dict] = None):
         self.mcp_manager: Optional[MCPManager] = None
         self.mcp_tools = []
         self.tool_mcp_server_dict = {}
 
         self.user_id = user_id
+
+        # 优先使用用户选择的模型（model_config）；未选择时回退到 config.yaml 中的默认配置
+        if model_config:
+            self.conversation_model = ModelManager.get_user_model(**model_config)
+            self.tool_call_model = ModelManager.get_user_model(**model_config)
+        else:
+            self.conversation_model = ModelManager.get_conversation_model()
+            self.tool_call_model = ModelManager.get_lingseek_intent_model()
 
     async def _generate_guide_prompt(self, lingseek_guide_prompt):
         """
@@ -252,7 +258,14 @@ class LingSeekAgent:
 
     async def _obtain_lingseek_tools(self, plugins, mcp_servers, enable_web_search=False):
         plugins_name = await ToolService.get_tool_name_by_id(plugins)
-        plugins_func = [LingSeekPlugins.get(name) for name in plugins_name]
+        plugins_func = []
+        for name in plugins_name:
+            func = LingSeekPlugins.get(name)
+            if func is None:
+                logger.warning(f"插件 {name} 未在 LingSeekPlugins 中注册，已跳过")
+                continue
+            plugins_func.append(func)
+
         tools = [convert_to_openai_tool(func) for func in plugins_func]
 
         if enable_web_search and web_search not in plugins_func:

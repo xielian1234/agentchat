@@ -4,6 +4,9 @@ import { ElMessage, ElMessageBox, UploadProps } from 'element-plus'
 import { Plus, Connection, VideoPlay, Edit, Delete, View, Tools } from '@element-plus/icons-vue'
 import * as monaco from 'monaco-editor'
 import mcpIcon from '../../assets/mcp.svg'
+
+// 读取登录 token（el-upload 使用自己的 XHR，不走 axios 拦截器，需手动带 Authorization）
+const getToken = () => localStorage.getItem('token') || ''
 import { 
   createMCPServerAPI, 
   getMCPServersAPI, 
@@ -925,6 +928,7 @@ const saveUserConfig = async () => {
                       <el-upload
                         class="logo-upload-square"
                         action="/api/v1/upload"
+                        :headers="{ Authorization: `Bearer ${getToken()}` }"
                         :show-file-list="false"
                         :on-success="handleLogoUploadSuccess"
                         :on-error="handleLogoUploadError"

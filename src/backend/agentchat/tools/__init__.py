@@ -38,10 +38,13 @@ AgentToolsWithName = {
     "get_arxiv": get_arxiv,
     "get_weather": get_weather,
     "get_delivery_info": get_delivery_info,
+    "get_delivery": get_delivery_info,  # 兼容 tool.json 中的工具名称
     "text_to_image": text_to_image,
     "image_to_text": image_to_text,
     "docx_to_pdf": convert_to_pdf,
+    "convert_to_pdf": convert_to_pdf,  # 兼容 tool.json 中的工具名称
     "pdf_to_docx": convert_to_docx,
+    "convert_to_docx": convert_to_docx,  # 兼容 tool.json 中的工具名称
     "bocha_search": bocha_search,
     "serply_search": serply_search,
     "youcom_search": youcom_search,

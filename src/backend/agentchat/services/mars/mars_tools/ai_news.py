@@ -3,7 +3,6 @@ import os
 import time
 from datetime import datetime
 from typing import Optional, Literal
-from urllib.parse import urljoin
 from loguru import logger
 from html2image import Html2Image
 from langchain.tools import tool
@@ -58,13 +57,8 @@ async def crawl_ai_news(
             file_name = f"AI日报-{datetime.today().date()}.md"
 
             oss_object_name = get_object_storage_base_path(file_name)
-            sign_url = urljoin(
-                app_settings.storage.active.base_url.rstrip("/") + "/",
-                oss_object_name.lstrip("/")
-            )
-
-            storage_client.sign_url_for_get(sign_url)
             storage_client.upload_file(oss_object_name, news_response)
+            sign_url = storage_client.sign_url_for_get(oss_object_name)
 
             writer({
                 "type": "tool_chunk",
@@ -113,13 +107,8 @@ async def crawl_ai_news(
             png_file_content = file.read()
 
         oss_object_name = get_object_storage_base_path(png_save_name)
-        sign_url = urljoin(
-            app_settings.storage.active.base_url.rstrip("/") + "/",
-            oss_object_name.lstrip("/")
-        )
-
-        storage_client.sign_url_for_get(sign_url)
         storage_client.upload_file(oss_object_name, png_file_content)
+        sign_url = storage_client.sign_url_for_get(oss_object_name)
         # 在本地进行删除
         os.remove(png_save_name)
 

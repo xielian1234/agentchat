@@ -13,3 +13,9 @@ memory_db/
 vector_db/
 
 node_modules/
+
+# Python 虚拟环境
+venv/
+
+# 本地配置（含个人密钥，不入库）
+config.local.yaml

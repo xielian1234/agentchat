@@ -13,6 +13,13 @@ class Reranker:
         if not documents:
             return []
 
+        rerank_config = app_settings.multi_models.rerank
+        if not rerank_config.api_key or not rerank_config.model_name:
+            raise ValueError(
+                "Rerank 模型未配置，无法进行文档重排序。"
+                "请在 config.yaml 的 multi_models.rerank 中填写你自己的 api_key、base_url 和 model_name（例如 DashScope 的 gte-rerank-v2）。"
+            )
+
         headers = {
             "Authorization": f"Bearer {app_settings.multi_models.rerank.api_key}",
             "Content-Type": "application/json"

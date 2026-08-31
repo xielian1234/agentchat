@@ -4,6 +4,13 @@ from agentchat.core.models.manager import ModelManager
 from agentchat.settings import app_settings
 
 async def get_embedding(query: Union[str, List[str]]):
+    embedding_config = app_settings.multi_models.embedding
+    if not embedding_config.api_key or not embedding_config.model_name:
+        raise ValueError(
+            "Embedding 模型未配置，无法进行向量化检索。"
+            "请在 config.yaml 的 multi_models.embedding 中填写你自己的 api_key、base_url 和 model_name（例如 DashScope 的 text-embedding-v4）。"
+        )
+
     embedding_client = ModelManager.get_embedding_openai_model()
 
     # 如果是字符串或长度小于等于10的列表，直接处理

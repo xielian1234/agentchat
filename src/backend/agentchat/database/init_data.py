@@ -19,6 +19,7 @@ from agentchat.services.storage import storage_client
 from agentchat.settings import app_settings
 from agentchat.utils.convert import convert_mcp_config
 from agentchat.core.agents.structured_response_agent import StructuredResponseAgent
+from agentchat.core.models.manager import ModelManager
 from agentchat.utils.helpers import get_provider_from_model
 
 async def init_agentchat_system():
@@ -43,19 +44,18 @@ async def init_agentchat_system():
             await asyncio.gather(
                 _init_default_tools(),
                 _init_default_llms(),
-                _init_system_mcp_server(),
                 upload_user_avatars_storage(),
             )
             await _init_default_agents()
-            logger.success("Initialized agentchat successfully")
-            return
+        else:
+            logger.info(f"Existing system detected ({len(agents)} agents), updating config...")
+            await _update_exist_llm()
 
-        logger.info(f"Existing system detected ({len(agents)} agents), updating config...")
+        # 无论首次启动还是已初始化，都确保系统 MCP Server 存在（幂等）并保持更新。
+        # 这样即使用户首次运行时尚未配置模型（MCP 初始化失败），后续接入模型后重启也能补建 MCP Server。
+        await _init_system_mcp_server()
+        await _update_mcp_server_into_mysql(True)
 
-        await asyncio.gather(
-            _update_exist_llm(),
-            _update_mcp_server_into_mysql(True),
-        )
         logger.success("agentchat runtime ready")
     except Exception as err:
         logger.error(f" agentchat init failed: {err}")
@@ -121,6 +121,10 @@ async def _update_exist_llm():
     model = settings.model_name
     provider = get_provider_from_model(model)
 
+    if not api_key:
+        logger.warning("未配置默认 LLM 的 API Key，跳过 LLM 配置更新（用户可在模型管理中自行接入，例如 DeepSeek）")
+        return
+
     llm = await LLMService.select_first_llm()
 
     if not llm:
@@ -158,6 +162,10 @@ async def _init_default_llms():
     """初始化默认 LLM"""
     settings = app_settings.multi_models.conversation_model
 
+    if not settings.api_key:
+        logger.warning("未配置默认 LLM 的 API Key，跳过默认模型初始化（用户可在模型管理中自行接入，例如 DeepSeek）")
+        return
+
     await LLMService.create_llm(
         user_id=SystemUser,
         model=settings.model_name,
@@ -176,6 +184,11 @@ async def _init_default_agents():
     - 并发创建
     """
     llm = await LLMService.get_one_llm()
+
+    if not llm:
+        logger.warning("系统中暂无可用 LLM，跳过默认 Agent 初始化")
+        return
+
     tools = await ToolService.get_tools_data()
 
     tasks = []
@@ -213,6 +226,27 @@ async def _init_system_mcp_server():
         logger.error(f"MCP init failed: {err}")
 
 
+async def _get_available_llm_model():
+    """
+    获取可用于生成 MCP 工具元信息的模型。
+
+    优先级：
+    1. config.yaml 中配置的对话模型（conversation_model）
+    2. 数据库中用户自行接入的 LLM（与灵寻/日常模式选择模型同一来源）
+
+    若两者都不可用，返回 None（调用方需跳过 MCP 初始化/更新）。
+    """
+    config_model = app_settings.multi_models.conversation_model
+    if config_model.api_key and config_model.model_name:
+        return ModelManager.get_conversation_model()
+
+    llms = await LLMService.get_llm_type()
+    if llms:
+        return ModelManager.get_user_model(**llms[0])
+
+    return None
+
+
 async def _update_mcp_server_into_mysql(has_mcp_server: bool):
     """
     同步 MCP Server 到数据库（核心逻辑）
@@ -243,6 +277,16 @@ async def _update_mcp_server_into_mysql(has_mcp_server: bool):
     mcp_manager = MCPManager(convert_mcp_config(servers_info))
     servers_params = await mcp_manager.show_mcp_tools()
 
+    if not servers_params:
+        logger.info("无可用的 MCP Server 工具，跳过初始化/更新")
+        return
+
+    # 获取用于生成 MCP 工具元信息的模型（config 优先，回退数据库中的用户模型）
+    model = await _get_available_llm_model()
+    if model is None:
+        logger.warning("无可用模型，无法生成 MCP 工具元信息，跳过 MCP Server 初始化/更新（请在 config.yaml 或模型管理中添加模型）")
+        return
+
     semaphore = asyncio.Semaphore(5)
 
     async def build_meta(server_name, params):
@@ -250,7 +294,7 @@ async def _update_mcp_server_into_mysql(has_mcp_server: bool):
         构建 MCP Tool 元信息（调用 LLM）
         """
         async with semaphore:
-            agent = StructuredResponseAgent(MCPResponseFormat)
+            agent = StructuredResponseAgent(MCPResponseFormat, model=model)
 
             result = agent.get_structured_response(
                 McpAsToolPrompt.format(

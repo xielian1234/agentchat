@@ -4,7 +4,6 @@ import tempfile
 import aiofiles
 import pymupdf4llm
 import pathlib
-from urllib.parse import urljoin
 from loguru import logger
 
 from agentchat.settings import app_settings
@@ -52,10 +51,8 @@ class PDFParser:
         async with aiofiles.open(file_path, "rb") as file:
             file_content = await file.read()
             oss_object_name = get_object_storage_base_path(os.path.basename(file_path))
-            sign_url = urljoin(app_settings.storage.active.base_url, oss_object_name)
-
-            storage_client.sign_url_for_get(sign_url)
             storage_client.upload_file(oss_object_name, file_content)
+            sign_url = storage_client.sign_url_for_get(oss_object_name)
             return sign_url
 
     async def upload_folder_to_oss(self, file_dir):

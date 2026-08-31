@@ -205,14 +205,20 @@ const handleSend = async () => {
     console.log('query:', query)
     console.log('tools:', selectedTools.value)
     console.log('webSearch:', webSearchEnabled.value)
-    
+
+    if (!selectedModelId.value) {
+      ElMessage.warning('请先选择模型')
+      return
+    }
+
     // 立即清空输入框
     inputMessage.value = ''
-    
+
     router.push({
       name: 'taskGraphPage',
       query: {
         query: query,
+        model_id: selectedModelId.value,
         tools: JSON.stringify(selectedTools.value),
         webSearch: webSearchEnabled.value.toString(),
         mcp_servers: JSON.stringify(selectedMcpServers.value)
@@ -455,8 +461,8 @@ watch(
           <!-- 底部控制栏 -->
           <div class="input-footer">
             <div class="footer-left">
-              <!-- 模型选择（仅日常模式显示） -->
-              <div v-if="selectedMode === 'normal'" class="selector-dropdown">
+              <!-- 模型选择（日常模式和灵寻模式均需选择模型） -->
+              <div class="selector-dropdown">
                 <div 
                   :class="['selector-item', { open: showModelSelector }]"
                   @click="showModelSelector = !showModelSelector"

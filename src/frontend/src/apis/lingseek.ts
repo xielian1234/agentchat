@@ -6,7 +6,8 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 export const generateLingSeekGuidePromptAPI = async (
   data: {
     query: string
-    tools?: string[]
+    model_id?: string
+    plugins?: string[]
     web_search?: boolean
     mcp_servers?: string[]
   },
@@ -78,6 +79,7 @@ export const regenerateLingSeekGuidePromptAPI = async (
     query: string
     guide_prompt: string
     feedback: string
+    model_id?: string
     web_search?: boolean
     plugins?: string[]
     mcp_servers?: string[]
@@ -144,6 +146,7 @@ export const regenerateLingSeekGuidePromptAPI = async (
 export const generateLingSeekTasksAPI = async (
   data: {
     guide_prompt: string
+    model_id?: string
   },
   onMessage: (data: any) => void,
   onError?: (error: any) => void,
@@ -208,6 +211,7 @@ export const startLingSeekTaskAPI = async (
   data: {
     query: string
     guide_prompt: string
+    model_id?: string
     web_search?: boolean
     plugins?: string[]
     mcp_servers?: string[]

@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 from starlette.responses import StreamingResponse
 
 from agentchat.api.services.user import UserPayload, get_login_user
+from agentchat.api.services.llm import LLMService
 from agentchat.schemas.lingseek import LingSeekGuidePrompt, LingSeekGuidePromptFeedBack, LingSeekTask
 from agentchat.schemas.usage_stats import UsageStatsAgentType
 from agentchat.services.lingseek.agent import LingSeekAgent
@@ -21,7 +22,8 @@ async def generate_lingseek_guide_prompt(
     set_user_id_context(login_user.user_id)
     set_agent_name_context(UsageStatsAgentType.lingseek_agent)
 
-    lingseek_agent = LingSeekAgent(login_user.user_id)
+    model_config = await LLMService.get_llm_by_id(lingseek_info.model_id) if lingseek_info.model_id else None
+    lingseek_agent = LingSeekAgent(login_user.user_id, model_config)
 
     async def general_generate():
         async for chunk in lingseek_agent.generate_guide_prompt(lingseek_info):
@@ -40,7 +42,8 @@ async def rebuild_generate_lingseek_guide_prompt(
     set_user_id_context(login_user.user_id)
     set_agent_name_context(UsageStatsAgentType.lingseek_agent)
 
-    lingseek_agent = LingSeekAgent(login_user.user_id)
+    model_config = await LLMService.get_llm_by_id(feedback_guide_prompt.model_id) if feedback_guide_prompt.model_id else None
+    lingseek_agent = LingSeekAgent(login_user.user_id, model_config)
 
     async def general_generate():
         async for chunk in lingseek_agent.generate_guide_prompt(feedback_guide_prompt, True):
@@ -55,7 +58,8 @@ async def generate_lingseek_tasks(
     task: LingSeekTask,
     login_user: UserPayload = Depends(get_login_user)
 ):
-    lingseek_agent = LingSeekAgent(login_user.user_id)
+    model_config = await LLMService.get_llm_by_id(task.model_id) if task.model_id else None
+    lingseek_agent = LingSeekAgent(login_user.user_id, model_config)
 
     async def general_generate():
         async for chunk in lingseek_agent.generate_tasks(task):
@@ -74,7 +78,8 @@ async def submit_lingseek_task(
     set_user_id_context(login_user.user_id)
     set_agent_name_context(UsageStatsAgentType.lingseek_agent)
 
-    lingseek_agent = LingSeekAgent(login_user.user_id)
+    model_config = await LLMService.get_llm_by_id(task.model_id) if task.model_id else None
+    lingseek_agent = LingSeekAgent(login_user.user_id, model_config)
 
     async def general_generate():
         async for chunk in lingseek_agent.submit_lingseek_task(task):

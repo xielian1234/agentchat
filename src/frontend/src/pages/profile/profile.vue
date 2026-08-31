@@ -7,6 +7,9 @@ import { updateUserInfoAPI, getUserIconsAPI, getUserInfoAPI } from '../../apis/a
 
 const userStore = useUserStore()
 
+// 读取登录 token（el-upload 使用自己的 XHR，不走 axios 拦截器，需手动带 Authorization）
+const getToken = () => localStorage.getItem('token') || ''
+
 // 表单数据
 const formData = ref({
   user_avatar: '',
@@ -413,6 +416,7 @@ const handleCustomUpload = async (event: Event) => {
           <el-upload
             ref="uploadRef"
             action="/api/v1/upload"
+            :headers="{ Authorization: `Bearer ${getToken()}` }"
             :show-file-list="false"
             :on-success="handleUploadSuccess"
             :before-upload="beforeUpload"

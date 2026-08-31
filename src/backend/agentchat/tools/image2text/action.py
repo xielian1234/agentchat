@@ -1,7 +1,9 @@
 import base64
+from loguru import logger
 from langchain.tools import tool
 
 from agentchat.core.models.manager import ModelManager
+from agentchat.settings import app_settings
 
 @tool(parse_docstring=True)
 def image_to_text(image_path: str):
@@ -17,6 +19,13 @@ def image_to_text(image_path: str):
     return _image_to_text(image_path)
 
 def _image_to_text(image_path):
+    qwen_vl_model = app_settings.multi_models.qwen_vl
+    if not qwen_vl_model.api_key or not qwen_vl_model.model_name:
+        logger.warning("多模态（视觉）模型未配置，跳过图片理解")
+        return ("图片理解功能未配置，无法识别图片。"
+                "该工具依赖多模态视觉模型（如通义千问 qwen-vl），DeepSeek 等纯文本模型无法替代。"
+                "如需使用，请在 config.yaml 的 multi_models.qwen_vl 中填写你自己的 api_key、base_url 和 model_name（例如 qwen-vl-plus）。")
+
     def encode_image():
         with open(image_path, "rb") as image_file:
             return base64.b64encode(image_file.read()).decode("utf-8")

@@ -46,6 +46,9 @@ const hasActiveEvents = ref(false)
 const fileUrl = ref("")
 const fileName = ref("")
 
+// 读取登录 token（el-upload 使用自己的 XHR，不走 axios 拦截器，需手动带 Authorization）
+const getToken = () => localStorage.getItem('token') || ''
+
 // 事件状态管理
 const eventStatusMap = ref<Map<string, EventStatus>>(new Map())
 const eventDisplayOrder = ref<string[]>([])
@@ -435,6 +438,7 @@ watch(
     <div class="input-area">
       <el-upload
         action="/api/v1/upload"
+        :headers="{ Authorization: `Bearer ${getToken()}` }"
         :on-success="handleUploadSuccess"
         :on-error="handleUploadError"
         :show-file-list="false"

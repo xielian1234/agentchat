@@ -26,8 +26,17 @@ def text_to_image(user_prompt: str):
 
 def _text_to_image(user_prompt):
     """给用户的图片描述生成一张照片"""
-    rsp = ImageSynthesis.call(api_key=app_settings.multi_models.text2image.api_key,
-                              model=app_settings.multi_models.text2image.model_name,
+    api_key = app_settings.multi_models.text2image.api_key
+    model = app_settings.multi_models.text2image.model_name
+
+    if not api_key or not model:
+        logger.warning("文生图功能未配置，跳过生成")
+        return ("文生图功能未配置，无法生成图片。"
+                "该工具依赖阿里云 DashScope（通义万相）图像生成服务，DeepSeek 等对话模型无法替代。"
+                "如需使用，请在 config.yaml 的 multi_models.text2image 中填写你自己的 DashScope api_key 和 model_name（例如 wanx2.0-t2i-turbo）。")
+
+    rsp = ImageSynthesis.call(api_key=api_key,
+                              model=model,
                               prompt=user_prompt,
                               n=1,
                               size='1024*1024')

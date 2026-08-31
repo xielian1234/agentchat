@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 class LingSeekGuidePrompt(BaseModel):
     query: str
+    model_id: str = ""
     web_search: bool = True
     plugins: List[str] = []
     mcp_servers: List[str] = []
@@ -13,6 +14,7 @@ class LingSeekGuidePromptFeedBack(BaseModel):
     query: str
     guide_prompt: str
     feedback: str = ""
+    model_id: str = ""
     web_search: bool = True
     plugins: List[str] = []
     mcp_servers: List[str] = []
@@ -20,6 +22,7 @@ class LingSeekGuidePromptFeedBack(BaseModel):
 class LingSeekTask(BaseModel):
     query: str
     guide_prompt: str
+    model_id: str = ""
     web_search: bool = True
     plugins: List[str] = []
     mcp_servers: List[str] = []

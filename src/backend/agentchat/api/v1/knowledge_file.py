@@ -1,8 +1,9 @@
 import os
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 from fastapi import APIRouter, Body, Depends, Query
 
 from agentchat.services.storage import storage_client
+from agentchat.settings import app_settings
 from agentchat.api.services.knowledge_file import KnowledgeFileService
 from agentchat.api.services.knowledge import KnowledgeService
 from agentchat.api.services.user import get_login_user, UserPayload
@@ -19,12 +20,16 @@ async def upload_file(
     login_user: UserPayload = Depends(get_login_user)
 ):
     try:
-        # 获取本地临时文件路径
-        file_name = file_url.split("/")[-1]
-        local_file_path = get_save_tempfile(file_name)
-        # 根据URL解析出对应的object name
+        # 根据URL解析出对应的 object name（签名 URL 的 path 会包含 bucket 前缀，需要去掉）
         parsed = urlparse(file_url)
-        object_key = parsed.path.lstrip('/')
+        object_key = unquote(parsed.path).lstrip('/')
+        bucket = app_settings.storage.active.bucket_name
+        if object_key.startswith(bucket + "/"):
+            object_key = object_key[len(bucket) + 1:]
+
+        # 获取本地临时文件路径（用 path 的 basename，避免带上 query 参数）
+        file_name = os.path.basename(unquote(parsed.path))
+        local_file_path = get_save_tempfile(file_name)
         storage_client.download_file(object_key, local_file_path)
         # 获得文件的字节数
         file_size_bytes = os.path.getsize(local_file_path)

@@ -133,6 +133,7 @@ const historyContexts = ref<HistoryContext[]>([])
 const taskParams = ref({
   query: '',
   guide_prompt: '',
+  model_id: '',
   web_search: false,
   plugins: [] as string[],
   mcp_servers: [] as string[]
@@ -142,6 +143,7 @@ const taskParams = ref({
 const originalParams = ref({
   query: '',
   tools: [] as string[],
+  model_id: '',
   web_search: false,
   plugins: [] as string[],
   mcp_servers: [] as string[]
@@ -301,7 +303,8 @@ const generateGuidePrompt = async () => {
     await generateLingSeekGuidePromptAPI(
       {
         query: originalParams.value.query,
-        tools: originalParams.value.tools,
+        model_id: originalParams.value.model_id,
+        plugins: originalParams.value.plugins,
         web_search: originalParams.value.web_search,
         mcp_servers: originalParams.value.mcp_servers
       },
@@ -363,6 +366,7 @@ const handleConfirmRegenerate = async () => {
     await regenerateLingSeekGuidePromptAPI(
       {
         query: originalParams.value.query,
+        model_id: originalParams.value.model_id,
         plugins: originalParams.value.plugins,
         web_search: originalParams.value.web_search,
         mcp_servers: originalParams.value.mcp_servers,
@@ -430,15 +434,17 @@ onMounted(async () => {
     
     // 保存参数
     originalParams.value.query = route.query.query as string || ''
+    originalParams.value.model_id = route.query.model_id as string || ''
     originalParams.value.web_search = route.query.webSearch === 'true'
-    
+
     const tools = route.query.tools as string
     originalParams.value.tools = tools ? JSON.parse(tools) : []
     originalParams.value.plugins = originalParams.value.tools
     const mcpQuery = route.query.mcp_servers as string
     originalParams.value.mcp_servers = mcpQuery ? JSON.parse(mcpQuery) : []
-    
+
     taskParams.value.query = originalParams.value.query
+    taskParams.value.model_id = originalParams.value.model_id
     taskParams.value.web_search = originalParams.value.web_search
     taskParams.value.plugins = originalParams.value.plugins
     taskParams.value.mcp_servers = originalParams.value.mcp_servers
