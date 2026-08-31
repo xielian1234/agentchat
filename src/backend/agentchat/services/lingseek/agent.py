@@ -24,7 +24,7 @@ from agentchat.services.mcp.manager import MCPManager
 from agentchat.prompts.lingseek import GenerateGuidePrompt, FeedBackGuidePrompt, GenerateTitlePrompt, \
     GenerateTaskPrompt, FixJsonPrompt, ToolCallPrompt, SystemMessagePrompt
 from agentchat.schemas.lingseek import LingSeekGuidePrompt, LingSeekGuidePromptFeedBack, LingSeekTask, \
-    LingSeekTaskStep
+    LingSeekTaskStep, LingSeekStepRetry
 
 
 class LingSeekAgent:
@@ -161,10 +161,12 @@ class LingSeekAgent:
 
         tasks_graph = {}
         tasks_show = []
+        steps_payload = []
         steps = task.get("steps", [])
         for step in steps:
             task_step = LingSeekTaskStep(**step)
             tasks_graph[task_step.step_id] = task_step
+            steps_payload.append(task_step.model_dump())
 
         for step_id, step_info in tasks_graph.items():
             for input_step in step_info.input:
@@ -181,7 +183,7 @@ class LingSeekAgent:
                     })
         yield {
             "event": "generate_tasks",
-            "data": {"graph": tasks_show}
+            "data": {"graph": tasks_show, "steps": steps_payload}
         }
 
 
@@ -198,27 +200,48 @@ class LingSeekAgent:
                         tasks_graph[input_step].model_dump()
                     )
 
-            step_prompt = ToolCallPrompt.format(
-                step_info=step_info,
-                step_context=str(step_context)
-            )
-            step_messages = [SystemMessage(content=step_prompt), HumanMessage(content=lingseek_task.query)]
-            response = await tool_call_model.ainvoke(input=step_messages, config={"callbacks": [usage_metadata_callback]})
+            yield {
+                "event": "step_start",
+                "data": {"step_id": step_info.step_id, "title": step_info.title}
+            }
 
-            tools_messages = await self._parse_function_call_response(response)
-
-            step_info.result = "\n".join([msg.content for msg in tools_messages])
+            step_status = "completed"
+            step_error = ""
+            try:
+                response, tools_messages, result = await self._execute_step_tools(
+                    tool_call_model, step_info, step_context, lingseek_task.query)
+                step_info.result = result
+            except Exception as err:
+                logger.error(f"步骤「{step_info.title}」执行失败: {err}")
+                response = None
+                tools_messages = []
+                step_info.result = ""
+                step_status = "failed"
+                step_error = str(err)
 
             context_task.append(step_info.model_dump())
-            if tools_messages: # 合到整体Messages
-                messages.append(response)
-                messages.extend(tools_messages)
-            else:
-                messages.append(HumanMessage(content=lingseek_task.query))
-                messages.append(AIMessage(content=response.content))
+            if response is not None:
+                if tools_messages:  # 合到整体Messages
+                    messages.append(response)
+                    messages.extend(tools_messages)
+                else:
+                    messages.append(HumanMessage(content=lingseek_task.query))
+                    messages.append(AIMessage(content=response.content))
+
             yield {
                 "event": "step_result",
-                "data": {"message": step_info.result or " ", "title": step_info.title}
+                "data": {
+                    "step_id": step_info.step_id,
+                    "title": step_info.title,
+                    "message": step_info.result or " ",
+                    "status": step_status,
+                    "error": step_error,
+                    "thought": step_info.thought,
+                    "target": step_info.target,
+                    "workflow": step_info.workflow,
+                    "precautions": step_info.precautions,
+                    "input_thought": step_info.input_thought,
+                }
             }
 
         final_response = ""
@@ -236,8 +259,95 @@ class LingSeekAgent:
                 guide_prompt=lingseek_task.guide_prompt,
                 task=context_task,
                 task_graph=tasks_show,
-                answer=final_response
+                answer=final_response,
+                model_id=lingseek_task.model_id,
+                web_search=lingseek_task.web_search,
+                plugins=lingseek_task.plugins,
+                mcp_servers=lingseek_task.mcp_servers,
             ))
+
+    async def _execute_step_tools(self, tool_call_model, step_info: LingSeekTaskStep, step_context, query: str):
+        step_prompt = ToolCallPrompt.format(
+            step_info=step_info,
+            step_context=str(step_context)
+        )
+        step_messages = [SystemMessage(content=step_prompt), HumanMessage(content=query)]
+        response = await tool_call_model.ainvoke(input=step_messages, config={"callbacks": [usage_metadata_callback]})
+        tools_messages = await self._parse_function_call_response(response)
+        result = "\n".join([msg.content for msg in tools_messages])
+        return response, tools_messages, result
+
+    async def retry_step(self, lingseek_step_retry: LingSeekStepRetry):
+        step_map = {s.step_id: s for s in lingseek_step_retry.steps}
+        retry_step = step_map.get(lingseek_step_retry.retry_step_id)
+        if retry_step is None:
+            yield {
+                "event": "step_result",
+                "data": {
+                    "step_id": lingseek_step_retry.retry_step_id,
+                    "title": "",
+                    "message": "",
+                    "status": "failed",
+                    "error": "未找到该节点",
+                }
+            }
+            return
+
+        tools = await self._obtain_lingseek_tools(lingseek_step_retry.plugins, lingseek_step_retry.mcp_servers, lingseek_step_retry.web_search)
+        tool_call_model = self.tool_call_model.bind_tools(tools) if len(tools) else self.tool_call_model
+
+        step_context = [step_map[i].model_dump() for i in retry_step.input if i in step_map]
+
+        yield {
+            "event": "step_start",
+            "data": {"step_id": retry_step.step_id, "title": retry_step.title}
+        }
+
+        step_status = "completed"
+        step_error = ""
+        try:
+            _, _, result = await self._execute_step_tools(
+                tool_call_model, retry_step, step_context, lingseek_step_retry.query)
+            retry_step.result = result
+        except Exception as err:
+            logger.error(f"重试步骤「{retry_step.title}」失败: {err}")
+            step_status = "failed"
+            step_error = str(err)
+
+        yield {
+            "event": "step_result",
+            "data": {
+                "step_id": retry_step.step_id,
+                "title": retry_step.title,
+                "message": retry_step.result or " ",
+                "status": step_status,
+                "error": step_error,
+                "thought": retry_step.thought,
+                "target": retry_step.target,
+                "workflow": retry_step.workflow,
+                "precautions": retry_step.precautions,
+                "input_thought": retry_step.input_thought,
+            }
+        }
+
+        # 基于（更新后的）所有步骤结果重新生成最终答案
+        final_messages = self._build_final_answer_messages(lingseek_step_retry.query, lingseek_step_retry.steps)
+        async for chunk in self.conversation_model.astream(final_messages):
+            yield {
+                "event": "task_result",
+                "data": {"message": chunk.content}
+            }
+
+    def _build_final_answer_messages(self, query: str, steps: List[LingSeekTaskStep]):
+        parts = []
+        for s in steps:
+            parts.append(f"### 步骤：{s.title}\n{s.result or '（无结果）'}")
+        summary = "\n\n".join(parts)
+        return [
+            SystemMessage(content=SystemMessagePrompt),
+            HumanMessage(content=query),
+            HumanMessage(content=f"以下是各步骤的执行结果，请据此给出最终答案：\n\n{summary}"),
+        ]
 
     async def _process_tools_result(self, tool_name, tool_args):
         def find_mcp_tool(tool_name):

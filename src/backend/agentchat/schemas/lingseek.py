@@ -38,3 +38,15 @@ class LingSeekTaskStep(BaseModel):
     input: List[str] = []
 
     result: str = ""
+
+
+class LingSeekStepRetry(BaseModel):
+    """单节点重试请求：携带完整步骤定义与已有结果，仅重跑 retry_step_id 对应节点"""
+    query: str
+    guide_prompt: str
+    model_id: str = ""
+    web_search: bool = True
+    plugins: List[str] = []
+    mcp_servers: List[str] = []
+    steps: List[LingSeekTaskStep] = []
+    retry_step_id: str

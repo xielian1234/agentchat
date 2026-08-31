@@ -54,3 +54,8 @@ class WorkSpaceSessionContext(BaseModel):
     task: list[dict] = []
     task_graph: list[dict] = []
     answer: str
+    # 保存本次任务的执行参数，用于「复制为新任务」与「单节点重试」
+    model_id: str = ""
+    web_search: bool = False
+    plugins: List[str] = []
+    mcp_servers: List[str] = []

@@ -4,15 +4,22 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { MdPreview, MdEditor } from 'md-editor-v3'
 import 'md-editor-v3/lib/style.css'
-import { 
-  generateLingSeekGuidePromptAPI, 
+import {
+  generateLingSeekGuidePromptAPI,
   regenerateLingSeekGuidePromptAPI,
-  startLingSeekTaskAPI 
+  startLingSeekTaskAPI,
+  retryLingSeekStepAPI
 } from '../../../apis/lingseek'
+import type { LingSeekStep } from '../../../apis/lingseek'
 import { getWorkspaceSessionInfoAPI } from '../../../apis/workspace'
 
 const route = useRoute()
 const router = useRouter()
+
+// 返回工作台
+const handleBack = () => {
+  router.push('/workspace')
+}
 
 interface GraphNode {
   start: string
@@ -20,8 +27,10 @@ interface GraphNode {
 }
 
 interface NodeStatus {
-  status: 'pending' | 'executing' | 'completed'
+  status: 'pending' | 'executing' | 'completed' | 'failed'
   message?: string
+  error?: string
+  step?: LingSeekStep
 }
 
 interface HistoryContext {
@@ -29,6 +38,11 @@ interface HistoryContext {
   guide_prompt?: string
   task_graph?: GraphNode[]
   answer: string
+  task?: LingSeekStep[]
+  model_id?: string
+  web_search?: boolean
+  plugins?: string[]
+  mcp_servers?: string[]
 }
 
 // 状态管理
@@ -36,6 +50,15 @@ const taskGraph = ref<GraphNode[]>([])
 const isStreaming = ref(false)
 const showGraph = ref(false)
 const nodeStatusMap = ref<Map<string, NodeStatus>>(new Map())
+// 任务步骤完整定义（用于「单节点重试」与「复制为新任务」）
+const taskSteps = ref<LingSeekStep[]>([])
+// 停止执行相关
+let abortController: AbortController | null = null
+let retryAbortController: AbortController | null = null
+const stopRequested = ref(false)
+// 单节点重试状态
+const isRetryingStep = ref(false)
+const retryingNodeId = ref<string | null>(null)
 const selectedNode = ref<string | null>(null)
 const showNodeDetail = ref(false)
 const taskResultContent = ref('')
@@ -156,9 +179,39 @@ const selectedNodeDetail = computed(() => {
   return {
     title: selectedNode.value,
     status: status?.status || 'pending',
-    message: status?.message || '该节点尚未执行'
+    message: status?.message || '该节点尚未执行',
+    error: status?.error || '',
+    step: status?.step || null
   }
 })
+
+// 当前选中节点对应的步骤ID（单节点重试用）
+const selectedNodeStepId = computed(() => {
+  const detail = selectedNodeDetail.value
+  if (detail?.step?.step_id) return detail.step.step_id
+  return taskSteps.value.find(s => s.title === selectedNode.value)?.step_id || ''
+})
+
+// 状态文案
+const statusText = (status?: string) => {
+  switch (status) {
+    case 'completed': return '已完成'
+    case 'executing': return '执行中'
+    case 'failed': return '失败'
+    default: return '待执行'
+  }
+}
+
+// 操作流程格式化（可能是字符串或结构化数据）
+const formatWorkflow = (workflow: any) => {
+  if (!workflow) return '—'
+  if (typeof workflow === 'string') return workflow
+  try {
+    return JSON.stringify(workflow, null, 2)
+  } catch {
+    return String(workflow)
+  }
+}
 
 // 构建图形节点和边的数据结构（竖向布局）
 const graphData = computed(() => {
@@ -448,19 +501,26 @@ onMounted(async () => {
     taskParams.value.web_search = originalParams.value.web_search
     taskParams.value.plugins = originalParams.value.plugins
     taskParams.value.mcp_servers = originalParams.value.mcp_servers
-    
+
+    // 「复制为新任务」模式：带入已有的指导手册，不再重新生成
+    const copiedGuide = route.query.guide_prompt as string
+    if (copiedGuide) {
+      guidePrompt.value = copiedGuide
+      taskParams.value.guide_prompt = copiedGuide
+    }
+
     console.log('✅ 用户问题:', originalParams.value.query)
     console.log('✅ 选中工具:', originalParams.value.tools)
     console.log('✅ 联网搜索:', originalParams.value.web_search)
-    
+
     // 清理 URL 参数（保留功能，隐藏参数）
     router.replace({ path: '/workspace/taskGraph' })
-    
-    // 自动开始生成指导手册
-    if (originalParams.value.query) {
+
+    // 自动开始生成指导手册（复制为新任务已带入手册时跳过）
+    if (originalParams.value.query && !copiedGuide) {
       console.log('🚀 开始自动生成指导手册...')
       await generateGuidePrompt()
-    } else {
+    } else if (!originalParams.value.query) {
       console.warn('⚠️ 缺少用户问题，无法生成指导手册')
     }
   }
@@ -496,6 +556,19 @@ const loadSessionInfo = async (sessionId: string) => {
         } else {
           console.warn('⚠️ 未找到 guide_prompt 字段')
         }
+
+        // 恢复执行参数（供「复制为新任务」与「单节点重试」使用）
+        taskParams.value.query = context.query || ''
+        taskParams.value.guide_prompt = context.guide_prompt || ''
+        taskParams.value.model_id = context.model_id || ''
+        taskParams.value.web_search = !!context.web_search
+        taskParams.value.plugins = context.plugins || []
+        taskParams.value.mcp_servers = context.mcp_servers || []
+        // 恢复步骤完整定义（供「单节点重试」使用）
+        if (context.task && Array.isArray(context.task) && context.task.length > 0) {
+          taskSteps.value = context.task
+          console.log('✅ 已恢复步骤定义，数量:', taskSteps.value.length)
+        }
         
         // 显示任务图（对应第二列）- 使用 task_graph 字段
         console.log('🔍 检查 task_graph 字段:', context.task_graph)
@@ -518,9 +591,10 @@ const loadSessionInfo = async (sessionId: string) => {
           
           console.log('✅ 提取的节点集合:', Array.from(nodeSet))
           
-          // 所有节点标记为已完成
+          // 所有节点标记为已完成（携带完整步骤定义，供详情与重试使用）
           nodeSet.forEach((nodeId: string) => {
-            updateNodeStatus(nodeId, 'completed', '已执行完成')
+            const stepDef = taskSteps.value.find(s => s.title === nodeId)
+            updateNodeStatus(nodeId, 'completed', stepDef?.result || '已执行完成', '', stepDef)
           })
           
           showGraph.value = true
@@ -552,16 +626,16 @@ const loadSessionInfo = async (sessionId: string) => {
 }
 
 // 更新节点状态
-const updateNodeStatus = (title: string, status: 'pending' | 'executing' | 'completed', message?: string) => {
-  nodeStatusMap.value.set(title, { status, message })
+const updateNodeStatus = (title: string, status: 'pending' | 'executing' | 'completed' | 'failed', message?: string, error?: string, step?: LingSeekStep | null) => {
+  nodeStatusMap.value.set(title, { status, message, error, step: step || undefined })
 }
 
 // 处理节点点击
 const handleNodeClick = (nodeId: string) => {
   selectedNode.value = nodeId
   const nodeStatus = nodeStatusMap.value.get(nodeId)
-  
-  if (nodeStatus && nodeStatus.status === 'completed' && nodeStatus.message) {
+
+  if (nodeStatus && (nodeStatus.status === 'completed' || nodeStatus.status === 'failed')) {
     showNodeDetail.value = true
   } else if (nodeStatus && nodeStatus.status === 'executing') {
     ElMessage.info('该节点正在执行中...')
@@ -576,10 +650,147 @@ const closeNodeDetail = () => {
   selectedNode.value = null
 }
 
+// 停止执行
+const stopTask = () => {
+  stopRequested.value = true
+  if (retryAbortController) {
+    retryAbortController.abort()
+    retryAbortController = null
+  }
+  if (abortController) {
+    abortController.abort()
+    abortController = null
+  }
+  isStreaming.value = false
+  isRetryingStep.value = false
+  retryingNodeId.value = null
+  ElMessage.warning('已停止执行')
+}
+
+// 复制为新任务：携带当前参数与指导手册打开新页面
+const handleCopyAsNewTask = () => {
+  if (!taskParams.value.query) {
+    ElMessage.warning('缺少用户问题，无法复制为新任务')
+    return
+  }
+  const query: Record<string, string> = {
+    query: taskParams.value.query,
+    model_id: taskParams.value.model_id,
+    webSearch: String(taskParams.value.web_search)
+  }
+  const tools = taskParams.value.plugins.filter(Boolean)
+  if (tools.length) query.tools = JSON.stringify(tools)
+  const mcpServers = taskParams.value.mcp_servers.filter(Boolean)
+  if (mcpServers.length) query.mcp_servers = JSON.stringify(mcpServers)
+  const currentGuide = guidePrompt.value || taskParams.value.guide_prompt
+  if (currentGuide) query.guide_prompt = currentGuide
+
+  const href = router.resolve({ name: 'taskGraphPage', query }).href
+  window.open(href, '_blank')
+  ElMessage.success('已在新标签页创建新任务')
+}
+
+// 重试单个节点
+const handleRetryStep = async (stepId: string) => {
+  if (!stepId) {
+    ElMessage.error('未找到该节点的定义，无法重试')
+    return
+  }
+  if (isRetryingStep.value) return
+  isRetryingStep.value = true
+  retryingNodeId.value = stepId
+  closeNodeDetail()
+  stopRequested.value = false
+  // 清空旧结果，等待重试后的最终答案
+  taskResultContent.value = ''
+  resultBuffer.value = ''
+  showTaskResult.value = false
+  isReceivingResult.value = false
+
+  retryAbortController = new AbortController()
+  try {
+    await retryLingSeekStepAPI(
+      {
+        query: taskParams.value.query,
+        guide_prompt: taskParams.value.guide_prompt,
+        model_id: taskParams.value.model_id,
+        web_search: taskParams.value.web_search,
+        plugins: taskParams.value.plugins,
+        mcp_servers: taskParams.value.mcp_servers,
+        steps: taskSteps.value,
+        retry_step_id: stepId
+      },
+      () => {
+        // 通用消息（当前重试流程不产生文本块，暂不处理）
+      },
+      (stepStart) => {
+        // 节点开始重试
+        updateNodeStatus(stepStart.title, 'executing', '重试中...')
+      },
+      (stepData) => {
+        const status = stepData.status === 'failed' ? 'failed' : 'completed'
+        // 同步步骤定义中的结果（供再次重试使用）
+        const stepDef = taskSteps.value.find(s => s.step_id === stepData.step_id)
+        if (stepDef) stepDef.result = stepData.message
+        updateNodeStatus(stepData.title || '', status, stepData.message, stepData.error || '', stepDef)
+        if (status === 'failed') {
+          ElMessage.error(`节点「${stepData.title || stepData.step_id}」重试失败：${stepData.error || '未知错误'}`)
+        } else {
+          ElMessage.success(`节点「${stepData.title || stepData.step_id}」重试完成`)
+        }
+      },
+      (messageChunk) => {
+        if (typeof messageChunk === 'string') {
+          resultBuffer.value += messageChunk
+        }
+        if (!isReceivingResult.value) {
+          startReceivingResults()
+          return
+        }
+        if (!isDraining.value) {
+          startDrain()
+        }
+      },
+      (error) => {
+        console.error('❌ 节点重试出错:', error)
+        if (error?.name !== 'AbortError' && !stopRequested.value) {
+          ElMessage.error('节点重试失败')
+        }
+        isRetryingStep.value = false
+        retryingNodeId.value = null
+        retryAbortController = null
+      },
+      () => {
+        console.log('✅ 节点重试完成')
+        isRetryingStep.value = false
+        retryingNodeId.value = null
+        retryAbortController = null
+        startReceivingResults()
+      },
+      retryAbortController.signal
+    )
+  } catch (error) {
+    console.error('节点重试异常:', error)
+    ElMessage.error('节点重试请求失败')
+    isRetryingStep.value = false
+    retryingNodeId.value = null
+    retryAbortController = null
+  }
+}
+
 onBeforeUnmount(() => {
   if (drainTimer !== null) {
     window.clearInterval(drainTimer)
     drainTimer = null
+  }
+  // 页面销毁时中止仍在进行的执行
+  if (abortController) {
+    abortController.abort()
+    abortController = null
+  }
+  if (retryAbortController) {
+    retryAbortController.abort()
+    retryAbortController = null
   }
 })
 
@@ -607,15 +818,18 @@ const scrollGuideToBottom = () => {
 // 开始执行任务
 const startTask = async () => {
   console.log('开始执行任务')
-  
+
   taskGraph.value = []
   nodeStatusMap.value.clear()
+  taskSteps.value = []
   taskResultContent.value = ''
   resultBuffer.value = ''
   showTaskResult.value = false
   isReceivingResult.value = false
   isStreaming.value = true
   showGraph.value = false
+  stopRequested.value = false
+  abortController = new AbortController()
   // 清理可能遗留的回放定时器
   if (drainTimer !== null) {
     window.clearInterval(drainTimer)
@@ -637,21 +851,23 @@ const startTask = async () => {
           }
         }
       },
-      (graph) => {
-        // 处理任务图数据
-        console.log('📊 接收到任务图数据:', graph)
+      (graphPayload) => {
+        // 处理任务图数据（含完整步骤定义）
+        console.log('📊 接收到任务图数据:', graphPayload)
+        const graph = graphPayload.graph || []
         taskGraph.value = graph
-        
+        taskSteps.value = graphPayload.steps || []
+
         // 初始化所有节点状态
         const nodeSet = new Set<string>()
         const endNodes = new Set<string>()
-        
+
         graph.forEach((item: GraphNode) => {
           nodeSet.add(item.start)
           nodeSet.add(item.end)
           endNodes.add(item.end)
         })
-        
+
         // 找出所有起始节点（没有入边的节点，通常是用户问题）
         const startNodes = new Set<string>()
         nodeSet.forEach(node => {
@@ -659,7 +875,7 @@ const startTask = async () => {
             startNodes.add(node)
           }
         })
-        
+
         // 设置节点状态：起始节点默认已完成，其他节点待执行
         nodeSet.forEach(node => {
           if (startNodes.has(node)) {
@@ -670,15 +886,23 @@ const startTask = async () => {
             updateNodeStatus(node, 'pending')
           }
         })
-        
+
         showGraph.value = true
         ElMessage.success('任务图生成成功，开始执行任务')
       },
       (stepData) => {
-        // 处理步骤执行结果
+        // 处理步骤执行结果（含完整元数据）
         console.log('✅ 收到步骤结果:', stepData)
-        updateNodeStatus(stepData.title, 'completed', stepData.message)
-        ElMessage.success(`节点「${stepData.title}」执行完成`)
+        const status = stepData.status === 'failed' ? 'failed' : 'completed'
+        // 同步步骤定义中的结果（供「单节点重试」使用）
+        const stepDef = taskSteps.value.find(s => s.step_id === stepData.step_id)
+        if (stepDef) stepDef.result = stepData.message
+        updateNodeStatus(stepData.title || '', status, stepData.message, stepData.error || '', stepDef)
+        if (status === 'failed') {
+          ElMessage.error(`节点「${stepData.title || stepData.step_id}」执行失败${stepData.error ? '：' + stepData.error : ''}`)
+        } else {
+          ElMessage.success(`节点「${stepData.title || stepData.step_id}」执行完成`)
+        }
       },
       (messageChunk) => {
         // 统一写入缓冲。若尚未开始接收（通常为首个 task_result 到达），立即启动接收与排空
@@ -694,22 +918,37 @@ const startTask = async () => {
           startDrain()
         }
       },
+      (stepStart) => {
+        // 节点开始执行
+        console.log('▶️ 节点开始执行:', stepStart)
+        updateNodeStatus(stepStart.title, 'executing', '执行中...')
+      },
       (error) => {
         console.error('❌ 任务执行出错:', error)
+        if (error?.name === 'AbortError' || stopRequested.value) {
+          // 用户主动停止，不提示错误
+          return
+        }
         ElMessage.error('任务执行失败')
         isStreaming.value = false
       },
       () => {
         console.log('✅ 任务执行完成')
         isStreaming.value = false
+        abortController = null
+        stopRequested.value = false
         // 任务流程结束时，开启接收阶段并以流式回放缓冲
         startReceivingResults()
-      }
+      },
+      abortController.signal
     )
   } catch (error) {
     console.error('任务执行异常:', error)
-    ElMessage.error('请求失败，请检查网络连接')
+    if (error?.name !== 'AbortError' && !stopRequested.value) {
+      ElMessage.error('请求失败，请检查网络连接')
+    }
     isStreaming.value = false
+    abortController = null
   }
 }
 
@@ -720,6 +959,8 @@ const getNodeColor = (status: string) => {
       return '#10b981' // 绿色 - 已完成
     case 'executing':
       return '#f59e0b' // 橙色 - 执行中
+    case 'failed':
+      return '#ef4444' // 红色 - 失败
     case 'pending':
     default:
       return '#cbd5e1' // 灰色 - 待执行
@@ -729,6 +970,34 @@ const getNodeColor = (status: string) => {
 
 <template>
   <div class="task-graph-page" :key="String(route.query.session_id || route.query.query || Date.now())">
+    <!-- 顶部工具栏：返回按钮 + 操作按钮 -->
+    <div class="task-graph-topbar">
+      <button class="back-btn" @click="handleBack" title="返回工作台">
+        <span class="back-btn-icon">←</span>
+        <span>返回</span>
+      </button>
+      <div class="topbar-actions">
+        <button
+          v-if="isStreaming || isRetryingStep"
+          class="topbar-btn stop-btn"
+          @click="stopTask"
+          title="停止当前执行"
+        >
+          <span class="topbar-btn-icon">■</span>
+          <span>停止执行</span>
+        </button>
+        <button
+          v-if="showGraph && !isStreaming && !isRetryingStep && taskParams.query"
+          class="topbar-btn copy-btn"
+          @click="handleCopyAsNewTask"
+          title="复制当前任务参数为新任务"
+        >
+          <span class="topbar-btn-icon">📋</span>
+          <span>复制为新任务</span>
+        </button>
+      </div>
+    </div>
+
     <!-- 三列布局容器 -->
     <div class="three-column-layout">
       <!-- 第一列：指导手册 -->
@@ -800,7 +1069,7 @@ const getNodeColor = (status: string) => {
               
               <button
                 @click="handleStartTask"
-                :disabled="isGeneratingGuide || !guidePrompt || isStreaming"
+                :disabled="isGeneratingGuide || !guidePrompt || isStreaming || isRetryingStep"
                 class="action-btn start-btn"
               >
                 <span class="btn-icon">🚀</span>
@@ -819,6 +1088,10 @@ const getNodeColor = (status: string) => {
           <span v-if="isStreaming" class="status-badge streaming">
             <span class="status-dot"></span>
             <span>执行中</span>
+          </span>
+          <span v-else-if="isRetryingStep" class="status-badge streaming">
+            <span class="status-dot"></span>
+            <span>重试中</span>
           </span>
           <span v-else-if="showGraph" class="status-badge completed">
             <span class="status-icon">✓</span>
@@ -841,6 +1114,10 @@ const getNodeColor = (status: string) => {
               <div class="legend-item">
                 <span class="legend-dot completed"></span>
                 <span class="legend-text">已完成</span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-dot failed"></span>
+                <span class="legend-text">失败</span>
               </div>
             </div>
 
@@ -891,7 +1168,7 @@ const getNodeColor = (status: string) => {
                 :key="node.id"
                 :transform="`translate(${node.x}, ${node.y})`"
                 class="node-group"
-                :class="[`node-${node.status}`, { 'node-clickable': node.status === 'completed' }]"
+                :class="[`node-${node.status}`, { 'node-clickable': node.status === 'completed' || node.status === 'failed' }]"
                 @click="handleNodeClick(node.id)"
               >
                 <rect
@@ -901,11 +1178,11 @@ const getNodeColor = (status: string) => {
                   height="50"
                   rx="10"
                   class="node-rect"
-                  :fill="node.status === 'completed' ? 'url(#completedGradient)' : node.status === 'executing' ? 'url(#executingGradient)' : '#ffffff'"
+                  :fill="node.status === 'completed' ? 'url(#completedGradient)' : node.status === 'executing' ? 'url(#executingGradient)' : node.status === 'failed' ? '#fee2e2' : '#ffffff'"
                   :stroke="getNodeColor(node.status)"
                   stroke-width="2"
                 />
-                
+
                 <!-- 节点状态图标 -->
                 <text
                   x="-68"
@@ -913,7 +1190,7 @@ const getNodeColor = (status: string) => {
                   class="node-icon"
                   font-size="16"
                 >
-                  {{ node.status === 'completed' ? '✓' : node.status === 'executing' ? '⟳' : '○' }}
+                  {{ node.status === 'completed' ? '✓' : node.status === 'executing' ? '⟳' : node.status === 'failed' ? '✕' : '○' }}
                 </text>
                 
                 <!-- 节点文本 -->
@@ -986,9 +1263,35 @@ const getNodeColor = (status: string) => {
             <label class="detail-label">执行状态：</label>
             <div class="detail-value">
               <span class="status-tag" :class="selectedNodeDetail?.status">
-                {{ selectedNodeDetail?.status === 'completed' ? '已完成' : selectedNodeDetail?.status === 'executing' ? '执行中' : '待执行' }}
+                {{ statusText(selectedNodeDetail?.status) }}
               </span>
             </div>
+          </div>
+          <template v-if="selectedNodeDetail?.step">
+            <div class="detail-item">
+              <label class="detail-label">思考过程：</label>
+              <div class="detail-value">{{ selectedNodeDetail.step.thought || '—' }}</div>
+            </div>
+            <div class="detail-item">
+              <label class="detail-label">执行目标：</label>
+              <div class="detail-value">{{ selectedNodeDetail.step.target || '—' }}</div>
+            </div>
+            <div class="detail-item">
+              <label class="detail-label">操作流程：</label>
+              <div class="detail-value workflow-value">{{ formatWorkflow(selectedNodeDetail.step.workflow) }}</div>
+            </div>
+            <div class="detail-item">
+              <label class="detail-label">注意事项：</label>
+              <div class="detail-value">{{ selectedNodeDetail.step.precautions || '—' }}</div>
+            </div>
+            <div class="detail-item">
+              <label class="detail-label">输入依据：</label>
+              <div class="detail-value">{{ selectedNodeDetail.step.input_thought || '—' }}</div>
+            </div>
+          </template>
+          <div v-if="selectedNodeDetail?.error" class="detail-item">
+            <label class="detail-label">错误信息：</label>
+            <div class="detail-value error-content">{{ selectedNodeDetail.error }}</div>
           </div>
           <div class="detail-item">
             <label class="detail-label">执行结果：</label>
@@ -999,6 +1302,21 @@ const getNodeColor = (status: string) => {
               />
             </div>
           </div>
+        </div>
+        <div v-if="selectedNodeDetail && !isStreaming && !isRetryingStep" class="modal-footer">
+          <button
+            v-if="selectedNodeDetail.status === 'failed' || selectedNodeDetail.status === 'completed'"
+            class="retry-btn"
+            :disabled="!selectedNodeStepId"
+            @click="handleRetryStep(selectedNodeStepId)"
+          >
+            <span class="btn-icon">↻</span>
+            <span>重试该节点</span>
+          </button>
+          <button class="copy-btn" @click="handleCopyAsNewTask">
+            <span class="btn-icon">📋</span>
+            <span>复制为新任务</span>
+          </button>
         </div>
       </div>
     </div>
@@ -1054,6 +1372,8 @@ $error: #ef4444;
 .task-graph-page {
   width: 100%;
   height: 100vh;
+  display: flex;
+  flex-direction: column;
   background: linear-gradient(135deg, #ffffff 0%, #f0f9ff 50%, #ffffff 100%);
   overflow: hidden;
   position: relative;
@@ -1101,8 +1421,9 @@ $error: #ef4444;
 // 三列布局
 .three-column-layout {
   display: flex;
+  flex: 1;
+  min-height: 0;
   width: 100%;
-  height: 100%;
   gap: 16px;
   padding: 16px;
   position: relative;
@@ -2453,5 +2774,182 @@ $error: #ef4444;
 }
 .feedback-modal-overlay .feedback-modal .modal-footer button.confirm-btn:hover {
   background: var(--primary-600);
+}
+
+/* =============================
+   顶部工具栏与返回按钮
+   ============================= */
+.task-graph-topbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  background: var(--panel, #fff);
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  position: relative;
+  z-index: 10;
+
+  .back-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 16px;
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 999px;
+    background: #fff;
+    color: var(--text, #111827);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    transition: all 0.2s ease;
+
+    &:hover {
+      border-color: var(--primary, #2563eb);
+      color: var(--primary, #2563eb);
+      box-shadow: 0 4px 14px rgba(37, 99, 235, 0.18);
+    }
+
+    &:active {
+      transform: scale(0.97);
+    }
+
+    .back-btn-icon {
+      font-size: 16px;
+      line-height: 1;
+    }
+  }
+}
+
+/* 顶部操作按钮 */
+.topbar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.topbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text, #111827);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  transition: all 0.2s ease;
+
+  &:hover:not(:disabled) {
+    border-color: var(--primary, #2563eb);
+    color: var(--primary, #2563eb);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  &.stop-btn {
+    border-color: #fecaca;
+    color: #dc2626;
+
+    &:hover:not(:disabled) {
+      background: #fef2f2;
+      border-color: #f87171;
+      color: #dc2626;
+    }
+  }
+}
+
+/* 图例：失败状态 */
+.column-graph .graph-wrapper .legend-bar .legend-item .legend-dot.failed {
+  background: #ef4444;
+  box-shadow: none;
+}
+
+/* 节点失败状态 */
+.column-graph .graph-wrapper .graph-container .graph-svg .node-group.node-failed .node-icon {
+  fill: #ef4444;
+}
+
+/* 节点详情：失败标签 / 错误信息 / 操作流程 */
+.node-detail-modal .modal-content .modal-body .detail-value .status-tag.failed {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.node-detail-modal .modal-content .modal-body .detail-value.error-content {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  padding: 12px;
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.node-detail-modal .modal-content .modal-body .detail-value.workflow-value {
+  background: #f9fafb;
+  border: 1px solid var(--border, #e5e7eb);
+  padding: 12px;
+  border-radius: 8px;
+  white-space: pre-wrap;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 13px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+/* 节点详情：底部操作按钮 */
+.node-detail-modal .modal-content .modal-footer {
+  display: flex;
+  gap: 12px;
+  padding: 16px 24px;
+  background: #fff;
+  border-top: 1px solid var(--border, #e5e7eb);
+
+  button {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+
+    &.retry-btn {
+      background: var(--primary, #2563eb);
+      color: #fff;
+
+      &:hover:not(:disabled) {
+        background: var(--primary-600, #1d4ed8);
+      }
+
+      &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+    }
+
+    &.copy-btn {
+      background: #fff;
+      color: #374151;
+      border: 1px solid var(--border, #e5e7eb);
+
+      &:hover {
+        background: #f3f4f6;
+      }
+    }
+  }
 }
 </style>
