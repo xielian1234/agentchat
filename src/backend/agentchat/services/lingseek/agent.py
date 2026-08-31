@@ -25,6 +25,7 @@ from agentchat.prompts.lingseek import GenerateGuidePrompt, FeedBackGuidePrompt,
     GenerateTaskPrompt, FixJsonPrompt, ToolCallPrompt, SystemMessagePrompt
 from agentchat.schemas.lingseek import LingSeekGuidePrompt, LingSeekGuidePromptFeedBack, LingSeekTask, \
     LingSeekTaskStep, LingSeekStepRetry
+from agentchat.services.workspace.file_attachment import build_query_with_attachments
 
 
 class LingSeekAgent:
@@ -42,6 +43,12 @@ class LingSeekAgent:
         else:
             self.conversation_model = ModelManager.get_conversation_model()
             self.tool_call_model = ModelManager.get_lingseek_intent_model()
+
+    async def _augment_query(self, query: str, file_urls: List[str]) -> str:
+        """把附件内容拼进问题里，让灵寻的各阶段都能读到附件文本。"""
+        if not file_urls:
+            return query
+        return await build_query_with_attachments(query, file_urls)
 
     async def _generate_guide_prompt(self, lingseek_guide_prompt):
         """
@@ -118,9 +125,11 @@ class LingSeekAgent:
         tools = await self._obtain_lingseek_tools(lingseek_task.plugins, lingseek_task.mcp_servers, lingseek_task.web_search)
         tools_str = json.dumps(tools, ensure_ascii=False, indent=2)
 
+        query = await self._augment_query(lingseek_task.query, lingseek_task.file_urls)
+
         lingseek_task_prompt = GenerateTaskPrompt.format(
             tools_str=tools_str,
-            query=lingseek_task.query,
+            query=query,
             guide_prompt=lingseek_task.guide_prompt,
             current_time=get_beijing_time(),
         )
@@ -134,9 +143,11 @@ class LingSeekAgent:
         tools = await self._obtain_lingseek_tools(lingseek_info.plugins, lingseek_info.mcp_servers, lingseek_info.web_search)
         tools_str = json.dumps(tools, ensure_ascii=False, indent=2)
 
+        query = await self._augment_query(lingseek_info.query, lingseek_info.file_urls)
+
         if feedback:
             lingseek_guide_prompt = FeedBackGuidePrompt.format(
-                query=lingseek_info.query,
+                query=query,
                 tools_str=tools_str,
                 feedback=lingseek_info.feedback,
                 feedback_guide_prompt=lingseek_info.guide_prompt,
@@ -144,7 +155,7 @@ class LingSeekAgent:
         else:
             lingseek_guide_prompt = GenerateGuidePrompt.format(
                 tools_str=tools_str,
-                query=lingseek_info.query,
+                query=query,
                 guide_prompt_template=GuidePromptTemplate,
             )
         async for chunk in self._generate_guide_prompt(lingseek_guide_prompt):
@@ -158,6 +169,8 @@ class LingSeekAgent:
 
     async def submit_lingseek_task(self, lingseek_task: LingSeekTask):
         task = await self.generate_tasks(lingseek_task)
+
+        query = await self._augment_query(lingseek_task.query, lingseek_task.file_urls)
 
         tasks_graph = {}
         tasks_show = []
@@ -190,7 +203,7 @@ class LingSeekAgent:
         tools = await self._obtain_lingseek_tools(lingseek_task.plugins, lingseek_task.mcp_servers, lingseek_task.web_search)
         tool_call_model = self.tool_call_model.bind_tools(tools) if len(tools) else self.tool_call_model
 
-        messages: List[BaseMessage] = [SystemMessage(content=SystemMessagePrompt), HumanMessage(content=lingseek_task.query)]
+        messages: List[BaseMessage] = [SystemMessage(content=SystemMessagePrompt), HumanMessage(content=query)]
         context_task = []
         for step_id, step_info in tasks_graph.items():
             step_context = []
@@ -209,7 +222,7 @@ class LingSeekAgent:
             step_error = ""
             try:
                 response, tools_messages, result = await self._execute_step_tools(
-                    tool_call_model, step_info, step_context, lingseek_task.query)
+                    tool_call_model, step_info, step_context, query)
                 step_info.result = result
             except Exception as err:
                 logger.error(f"步骤「{step_info.title}」执行失败: {err}")
@@ -225,7 +238,7 @@ class LingSeekAgent:
                     messages.append(response)
                     messages.extend(tools_messages)
                 else:
-                    messages.append(HumanMessage(content=lingseek_task.query))
+                    messages.append(HumanMessage(content=query))
                     messages.append(AIMessage(content=response.content))
 
             yield {
@@ -298,6 +311,8 @@ class LingSeekAgent:
 
         step_context = [step_map[i].model_dump() for i in retry_step.input if i in step_map]
 
+        query = await self._augment_query(lingseek_step_retry.query, lingseek_step_retry.file_urls)
+
         yield {
             "event": "step_start",
             "data": {"step_id": retry_step.step_id, "title": retry_step.title}
@@ -307,7 +322,7 @@ class LingSeekAgent:
         step_error = ""
         try:
             _, _, result = await self._execute_step_tools(
-                tool_call_model, retry_step, step_context, lingseek_step_retry.query)
+                tool_call_model, retry_step, step_context, query)
             retry_step.result = result
         except Exception as err:
             logger.error(f"重试步骤「{retry_step.title}」失败: {err}")
@@ -331,7 +346,7 @@ class LingSeekAgent:
         }
 
         # 基于（更新后的）所有步骤结果重新生成最终答案
-        final_messages = self._build_final_answer_messages(lingseek_step_retry.query, lingseek_step_retry.steps)
+        final_messages = self._build_final_answer_messages(query, lingseek_step_retry.steps)
         async for chunk in self.conversation_model.astream(final_messages):
             yield {
                 "event": "task_result",

@@ -8,6 +8,7 @@ class LingSeekGuidePrompt(BaseModel):
     web_search: bool = True
     plugins: List[str] = []
     mcp_servers: List[str] = []
+    file_urls: List[str] = []
 
 
 class LingSeekGuidePromptFeedBack(BaseModel):
@@ -18,6 +19,7 @@ class LingSeekGuidePromptFeedBack(BaseModel):
     web_search: bool = True
     plugins: List[str] = []
     mcp_servers: List[str] = []
+    file_urls: List[str] = []
 
 class LingSeekTask(BaseModel):
     query: str
@@ -26,6 +28,7 @@ class LingSeekTask(BaseModel):
     web_search: bool = True
     plugins: List[str] = []
     mcp_servers: List[str] = []
+    file_urls: List[str] = []
 
 class LingSeekTaskStep(BaseModel):
     thought: str
@@ -48,5 +51,6 @@ class LingSeekStepRetry(BaseModel):
     web_search: bool = True
     plugins: List[str] = []
     mcp_servers: List[str] = []
+    file_urls: List[str] = []
     steps: List[LingSeekTaskStep] = []
     retry_step_id: str

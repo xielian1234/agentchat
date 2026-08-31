@@ -54,6 +54,7 @@ export interface WorkSpaceSimpleTask {
   plugins: string[]
   mcp_servers: string[]
   session_id?: string  // 会话ID，使用uuid4().hex格式
+  file_urls?: string[]  // 已上传附件的签名 URL，后端解析成文本注入提示词
 }
 
 export const workspaceSimpleChatAPI = async (data: WorkSpaceSimpleTask) => {

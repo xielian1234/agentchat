@@ -6,6 +6,7 @@ import { MdPreview } from "md-editor-v3"
 import "md-editor-v3/lib/style.css"
 import { getWorkspacePluginsAPI, workspaceSimpleChatStreamAPI, type WorkSpaceSimpleTask } from '../../../apis/workspace'
 import { getVisibleLLMsAPI, type LLMResponse } from '../../../apis/llm'
+import { uploadFileAPI } from '../../../apis/file'
 import { useUserStore } from '../../../store/user'
 
 const userStore = useUserStore()
@@ -28,6 +29,8 @@ const webSearchEnabled = ref(false)
 const toolDropdownRef = ref<HTMLElement | null>(null)
 const mcpDropdownRef = ref<HTMLElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
+// 已上传的附件列表（name 文件名、url 签名链接、uploading 是否正在上传）
+const attachedFiles = ref<Array<{ name: string; url: string; uploading: boolean }>>([])
 const currentSessionId = ref<string>('')  // 当前会话ID
 const chatConversationRef = ref<HTMLElement | null>(null)  // 聊天容器引用
 const isGenerating = ref(false)  // 是否正在生成回复
@@ -146,14 +149,42 @@ const triggerFileInput = () => {
   fileInputRef.value?.click()
 }
 
-// 处理文件选择
-const onFileChange = (e: Event) => {
+// 处理文件选择：逐个上传到对象存储，拿到签名 URL 后作为附件挂到输入框下方
+const onFileChange = async (e: Event) => {
   const input = e.target as HTMLInputElement
   const files = input.files
-  if (files && files.length > 0) {
-    ElMessage.success(`已选择 ${files.length} 个文件`)
+  if (!files || files.length === 0) {
+    if (input) input.value = ''
+    return
   }
+
+  for (const file of Array.from(files)) {
+    // 先挂一个"上传中"的占位，拿到 URL 后再更新
+    attachedFiles.value.push({ name: file.name, url: '', uploading: true })
+    const idx = attachedFiles.value.length - 1
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const response = await uploadFileAPI(formData)
+      const url = response.data?.data
+      if (typeof url === 'string' && url) {
+        attachedFiles.value[idx].url = url
+        attachedFiles.value[idx].uploading = false
+      } else {
+        throw new Error(response.data?.status_message || '上传失败')
+      }
+    } catch (err: any) {
+      ElMessage.error(`文件 ${file.name} 上传失败`)
+      attachedFiles.value.splice(idx, 1)
+    }
+  }
+
   if (input) input.value = ''
+}
+
+// 移除某个已上传的附件
+const removeAttachment = (index: number) => {
+  attachedFiles.value.splice(index, 1)
 }
 
 // 切换 MCP 服务器选择
@@ -196,8 +227,18 @@ const handleSend = async () => {
     return
   }
   
+  // 如果有附件还在上传中，阻止发送，避免文件链接丢失
+  if (attachedFiles.value.some(f => f.uploading)) {
+    ElMessage.warning('文件正在上传，请稍候再发送')
+    return
+  }
+
   const query = inputMessage.value.trim()
-  
+
+  // 已上传完成的附件：URL 单独传给后端，由后端解析成文本注入提示词
+  const readyFiles = attachedFiles.value.filter(f => f.url)
+  const fileUrls = readyFiles.map(f => f.url)
+
   // 根据模式跳转到不同的页面
   if (selectedMode.value === 'lingseek') {
     // 灵寻模式：直接跳转到任务流程图页面（三列布局）
@@ -211,8 +252,9 @@ const handleSend = async () => {
       return
     }
 
-    // 立即清空输入框
+    // 立即清空输入框与附件
     inputMessage.value = ''
+    attachedFiles.value = []
 
     router.push({
       name: 'taskGraphPage',
@@ -221,7 +263,8 @@ const handleSend = async () => {
         model_id: selectedModelId.value,
         tools: JSON.stringify(selectedTools.value),
         webSearch: webSearchEnabled.value.toString(),
-        mcp_servers: JSON.stringify(selectedMcpServers.value)
+        mcp_servers: JSON.stringify(selectedMcpServers.value),
+        file_urls: JSON.stringify(fileUrls)
       }
     })
   } else {
@@ -244,13 +287,18 @@ const handleSend = async () => {
 
     // 立即清空输入框，提升用户体验
     inputMessage.value = ''
-    
+    // 附件已随消息发送，清空附件列表
+    attachedFiles.value = []
+
     // 设置正在生成状态（转圈）
     isGenerating.value = true
 
-    // 将用户消息加入消息列表
+    // 将用户消息加入消息列表（气泡里只展示文本与文件名，链接不展示）
     console.log('将用户消息加入 messages')
-    messages.value.push({ role: 'user' as const, content: query })
+    const bubbleContent = readyFiles.length > 0
+      ? query + readyFiles.map(f => `\n📎 ${f.name}`).join('')
+      : query
+    messages.value.push({ role: 'user' as const, content: bubbleContent })
     
     // 自动滚动到底部
     scrollToBottom()
@@ -262,11 +310,12 @@ const handleSend = async () => {
 
     try {
       const payload: WorkSpaceSimpleTask = {
-        query,
+        query: query,
         model_id: selectedModelId.value,
         plugins: selectedTools.value,
         mcp_servers: selectedMcpServers.value,
-        session_id: currentSessionId.value  // 添加session_id参数
+        session_id: currentSessionId.value,  // 添加session_id参数
+        file_urls: fileUrls
       }
       console.log('准备调用 workspaceSimpleChatStreamAPI，payload:', payload)
       await workspaceSimpleChatStreamAPI(
@@ -457,7 +506,17 @@ watch(
             rows="4"
             @keydown="handleKeydown"
           ></textarea>
-          
+
+          <!-- 已上传附件列表 -->
+          <div v-if="attachedFiles.length > 0" class="attachment-list">
+            <div v-for="(file, idx) in attachedFiles" :key="idx" class="attachment-chip">
+              <span v-if="file.uploading" class="attachment-spinner"></span>
+              <span v-else class="attachment-dot">📎</span>
+              <span class="attachment-name">{{ file.name }}</span>
+              <button class="attachment-remove" title="移除附件" @click="removeAttachment(idx)">×</button>
+            </div>
+          </div>
+
           <!-- 底部控制栏 -->
           <div class="input-footer">
             <div class="footer-left">
@@ -949,6 +1008,62 @@ watch(
 
       &::placeholder {
         color: #9ca3af;
+      }
+    }
+
+    .attachment-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+      padding: 0 2px;
+
+      .attachment-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 10px;
+        background: #f0f4ff;
+        border: 1px solid #dbe4ff;
+        border-radius: 8px;
+        font-size: 12px;
+        color: #3b4a6b;
+
+        .attachment-dot {
+          font-size: 13px;
+          line-height: 1;
+        }
+
+        .attachment-spinner {
+          width: 12px;
+          height: 12px;
+          border: 2px solid #c7d2fe;
+          border-top-color: #3b82f6;
+          border-radius: 50%;
+          animation: spin 1s linear infinite;
+        }
+
+        .attachment-name {
+          max-width: 200px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .attachment-remove {
+          border: none;
+          background: transparent;
+          color: #9ca3af;
+          font-size: 15px;
+          line-height: 1;
+          cursor: pointer;
+          padding: 0 2px;
+          transition: color 0.2s ease;
+
+          &:hover {
+            color: #ef4444;
+          }
+        }
       }
     }
 

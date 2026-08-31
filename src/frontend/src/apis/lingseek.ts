@@ -37,6 +37,7 @@ export const generateLingSeekGuidePromptAPI = async (
     plugins?: string[]
     web_search?: boolean
     mcp_servers?: string[]
+    file_urls?: string[]
   },
   onMessage: (data: any) => void,
   onError?: (error: any) => void,
@@ -110,6 +111,7 @@ export const regenerateLingSeekGuidePromptAPI = async (
     web_search?: boolean
     plugins?: string[]
     mcp_servers?: string[]
+    file_urls?: string[]
   },
   onMessage: (data: any) => void,
   onError?: (error: any) => void,
@@ -242,6 +244,7 @@ export const startLingSeekTaskAPI = async (
     web_search?: boolean
     plugins?: string[]
     mcp_servers?: string[]
+    file_urls?: string[]
   },
   onMessage: (data: any) => void,
   onTaskGraph?: (payload: { graph: any[]; steps: LingSeekStep[] }) => void,  // 处理任务图数据（含完整步骤定义）
@@ -336,6 +339,7 @@ export const retryLingSeekStepAPI = async (
     web_search?: boolean
     plugins?: string[]
     mcp_servers?: string[]
+    file_urls?: string[]
     steps: LingSeekStep[]
     retry_step_id: string
   },

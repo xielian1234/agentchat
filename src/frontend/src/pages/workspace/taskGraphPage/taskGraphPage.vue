@@ -159,7 +159,8 @@ const taskParams = ref({
   model_id: '',
   web_search: false,
   plugins: [] as string[],
-  mcp_servers: [] as string[]
+  mcp_servers: [] as string[],
+  file_urls: [] as string[]
 })
 
 // 保存原始参数（用于重新生成）
@@ -169,7 +170,8 @@ const originalParams = ref({
   model_id: '',
   web_search: false,
   plugins: [] as string[],
-  mcp_servers: [] as string[]
+  mcp_servers: [] as string[],
+  file_urls: [] as string[]
 })
 
 // 获取当前选中节点的详情
@@ -359,7 +361,8 @@ const generateGuidePrompt = async () => {
         model_id: originalParams.value.model_id,
         plugins: originalParams.value.plugins,
         web_search: originalParams.value.web_search,
-        mcp_servers: originalParams.value.mcp_servers
+        mcp_servers: originalParams.value.mcp_servers,
+        file_urls: originalParams.value.file_urls
       },
       (data) => {
         // 处理流式数据
@@ -423,6 +426,7 @@ const handleConfirmRegenerate = async () => {
         plugins: originalParams.value.plugins,
         web_search: originalParams.value.web_search,
         mcp_servers: originalParams.value.mcp_servers,
+        file_urls: originalParams.value.file_urls,
         feedback: feedbackText.value,
         guide_prompt: currentGuidePrompt
       },
@@ -495,12 +499,15 @@ onMounted(async () => {
     originalParams.value.plugins = originalParams.value.tools
     const mcpQuery = route.query.mcp_servers as string
     originalParams.value.mcp_servers = mcpQuery ? JSON.parse(mcpQuery) : []
+    const fileUrlsQuery = route.query.file_urls as string
+    originalParams.value.file_urls = fileUrlsQuery ? JSON.parse(fileUrlsQuery) : []
 
     taskParams.value.query = originalParams.value.query
     taskParams.value.model_id = originalParams.value.model_id
     taskParams.value.web_search = originalParams.value.web_search
     taskParams.value.plugins = originalParams.value.plugins
     taskParams.value.mcp_servers = originalParams.value.mcp_servers
+    taskParams.value.file_urls = originalParams.value.file_urls
 
     // 「复制为新任务」模式：带入已有的指导手册，不再重新生成
     const copiedGuide = route.query.guide_prompt as string
@@ -682,6 +689,8 @@ const handleCopyAsNewTask = () => {
   if (tools.length) query.tools = JSON.stringify(tools)
   const mcpServers = taskParams.value.mcp_servers.filter(Boolean)
   if (mcpServers.length) query.mcp_servers = JSON.stringify(mcpServers)
+  const fileUrls = taskParams.value.file_urls.filter(Boolean)
+  if (fileUrls.length) query.file_urls = JSON.stringify(fileUrls)
   const currentGuide = guidePrompt.value || taskParams.value.guide_prompt
   if (currentGuide) query.guide_prompt = currentGuide
 
@@ -717,6 +726,7 @@ const handleRetryStep = async (stepId: string) => {
         web_search: taskParams.value.web_search,
         plugins: taskParams.value.plugins,
         mcp_servers: taskParams.value.mcp_servers,
+        file_urls: taskParams.value.file_urls,
         steps: taskSteps.value,
         retry_step_id: stepId
       },

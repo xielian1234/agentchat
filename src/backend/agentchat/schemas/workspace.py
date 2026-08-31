@@ -16,3 +16,4 @@ class WorkSpaceSimpleTask(BaseModel):
     session_id: str
     plugins: List[str] = []
     mcp_servers: List[str] = []
+    file_urls: List[str] = []

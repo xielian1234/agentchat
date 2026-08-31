@@ -13,6 +13,7 @@ from agentchat.schemas.usage_stats import UsageStatsAgentType
 from agentchat.schemas.workspace import WorkSpaceSimpleTask
 from agentchat.api.services.user import UserPayload, get_login_user
 from agentchat.services.workspace.simple_agent import WorkSpaceSimpleAgent, MCPConfig
+from agentchat.services.workspace.file_attachment import build_query_with_attachments
 from agentchat.utils.contexts import set_user_id_context, set_agent_name_context
 
 router = APIRouter(prefix="/workspace", tags=["WorkSpace"])
@@ -91,7 +92,9 @@ async def workspace_simple_chat(simple_task: WorkSpaceSimpleTask,
         history_messages = "无历史对话"
 
     async def general_generate():
-        async for chunk in simple_agent.astream([SystemMessage(content=SYSTEM_PROMPT.format(history=str(history_messages))), HumanMessage(content=simple_task.query)]):
+        # 有附件时先把附件内容解析成文本拼进问题里，让模型能"读懂"文件
+        query = await build_query_with_attachments(simple_task.query, simple_task.file_urls)
+        async for chunk in simple_agent.astream([SystemMessage(content=SYSTEM_PROMPT.format(history=str(history_messages))), HumanMessage(content=query)]):
             # chunk 已经是 dict: {"event": "task_result", "data": {"message": "..."}}
             # 需要 JSON 序列化后作为 SSE 的 data 字段
             yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
