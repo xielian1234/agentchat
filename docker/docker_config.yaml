@@ -130,7 +130,7 @@ default_config:
 
 # 扩展功能：微信配置 (不添加也可正常运行)
 wechat_config:
-  token: "LiangTian"
+  token: "your_token"
   app_id: "wxf768871******"
   secret: "063c4df15544235abd9******"
 
@@ -140,7 +140,7 @@ langfuse:
   host: "https://cloud.langfuse.com"
   public_key: "pk-lf-q3e80e5f-da6d-40cb-8bc1-******" # Langfuse 公钥
   secret_key: "sk-lf-q3e80e5f-da6d-40cb-8bc1-******" # Langfuse 私钥
-  user_id: "LiangTian" # 用户 ID
+  user_id: "your_user_id" # 用户 ID
 
 # 接口白名单路径
 whitelist_paths: ["/api/v1/mcp/*"]
