@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 import pytz
-from sqlalchemy import DateTime, text, Column
+from sqlalchemy import DateTime, text, Column, Text
 from sqlmodel import Session, SQLModel, Field
 from uuid import uuid4
 
@@ -21,7 +21,7 @@ class KnowledgeFileTable(SQLModelSerializable, table=True):
     knowledge_id: str = Field(index=True, description="知识库的ID")
     status: str = Field(default=Status.success, description="文件解析的状态 ")
     user_id: str = Field(index=True, description="用户ID")
-    oss_url: str = Field(default="", description="知识库文件保存到oss的路径")
+    oss_url: str = Field(default="", sa_column=Column(Text), description="知识库文件保存到oss的路径（签名URL，较长）")
     file_size: int = Field(default=0,description="文件大小（单位：字节），如317440表示310KB")
     update_time: Optional[datetime] = Field(sa_column=Column(
         DateTime,
