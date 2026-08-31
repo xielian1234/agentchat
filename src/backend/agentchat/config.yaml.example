@@ -1,4 +1,6 @@
 # 服务配置
+# 说明：本文件是配置模板。请复制为 config.yaml（同名去掉 .example）后填写你自己的密钥。
+#       config.yaml 已被 .gitignore 忽略，不会提交到仓库。
 server:
   env: "dev" # prod / test / dev
   host: "127.0.0.1"
@@ -9,8 +11,8 @@ server:
 # 数据库配置：MySQL (请根据实际配置更改 endpoint)
 # 格式：mysql+pymysql://<user>:<password>@<host>:<port>/<database>
 mysql:
-  endpoint: "mysql+pymysql://root:20050304@127.0.0.1:3306/agentchat"
-  async_endpoint: "mysql+aiomysql://root:20050304@127.0.0.1:3306/agentchat"
+  endpoint: "mysql+pymysql://root:your_password@127.0.0.1:3306/agentchat"
+  async_endpoint: "mysql+aiomysql://root:your_password@127.0.0.1:3306/agentchat"
 
 # 缓存配置：Redis
 redis:
@@ -22,19 +24,19 @@ redis:
 multi_models:
   # 对话模型配置
   conversation_model:
-    api_key: "" # 请填写你自己的 API Key
-    base_url: "" # 例如 https://api.deepseek.com/v1
-    model_name: "" # 例如 deepseek-chat
+    api_key: "" # 请填写你自己的 API Key（例如 Kimi：https://api.moonshot.cn/v1）
+    base_url: "https://api.moonshot.cn/v1" # Kimi 国内版（示例）
+    model_name: "kimi-k2.6" # 通用对话（示例，也支持 JSON 输出）
   # 工具调用/Function Call 模型配置
   tool_call_model:
     api_key: "" # 请填写你自己的 API Key
-    base_url: "" # 例如 https://api.deepseek.com/v1
-    model_name: "" # 例如 deepseek-chat
+    base_url: "https://api.moonshot.cn/v1"
+    model_name: "kimi-k2.6" # 支持 Function Call
   # 复杂推理模型配置
   reasoning_model:
     api_key: "" # 请填写你自己的 API Key
-    base_url: "" # 例如 https://api.deepseek.com/v1
-    model_name: "" # 例如 deepseek-reasoner
+    base_url: "https://api.moonshot.cn/v1"
+    model_name: "kimi-k3" # 最强推理（如需更快可换 kimi-k2.6）
   # 文生图模型配置
   text2image:
     api_key: "" # 请填写你自己的 API Key
@@ -48,9 +50,9 @@ multi_models:
 
   # Embedding 模型配置 (用于向量化)
   embedding:
-    api_key: "" # 请填写你自己的 API Key
-    base_url: ""
-    model_name: ""
+    api_key: "" # 请填写你自己的 API Key（例如智谱：https://open.bigmodel.cn/api/paas/v4）
+    base_url: "https://open.bigmodel.cn/api/paas/v4" # 智谱 OpenAI 兼容端点（示例）
+    model_name: "embedding-3" # 智谱 embedding-3（2048 维，示例）
 
   # Rerank 模型配置 (用于重排序召回结果)
   rerank:
@@ -139,7 +141,7 @@ default_config:
 
 # 扩展功能：微信配置 (不添加也可正常运行)
 wechat_config:
-  token: "LiangTian"
+  token: "your_token"
   app_id: "wxf768871******"
   secret: "063c4df15544235abd9******"
 
@@ -149,7 +151,7 @@ langfuse:
   host: "https://cloud.langfuse.com"
   public_key: "pk-lf-q3e80e5f-da6d-40cb-8bc1-******" # Langfuse 公钥
   secret_key: "sk-lf-q3e80e5f-da6d-40cb-8bc1-******" # Langfuse 私钥
-  user_id: "LiangTian" # 用户 ID
+  user_id: "your_user_id" # 用户 ID
 
 # 接口白名单路径
 whitelist_paths: ["/mcp/*"]
